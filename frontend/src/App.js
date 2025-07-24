@@ -1,81 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Text, Box } from '@react-three/drei';
+import * as THREE from 'three';
 import axios from 'axios';
+import CityMap from './components/CityMap';
 
-// Building component for 3D visualization
-function Building({ building, isSelected, onClick }) {
-  const meshRef = useRef();
-  
-  const handleClick = (event) => {
-    event.stopPropagation();
-    onClick(building);
-  };
-
-  return (
-    <group
-      position={[
-        (building.lng + 114.0719) * 1000, // Convert to 3D coordinates
-        building.height / 4,
-        (building.lat - 51.0447) * 1000
-      ]}
-      onClick={handleClick}
-    >
-      <Box
-        ref={meshRef}
-        args={[20, building.height / 2, 20]}
-        position={[0, 0, 0]}
-      >
-        <meshStandardMaterial
-          color={isSelected ? '#ffff00' : building.color}
-          transparent
-          opacity={0.8}
-        />
-      </Box>
-      <Text
-        position={[0, building.height / 4 + 10, 0]}
-        fontSize={8}
-        color="white"
-        anchorX="center"
-        anchorY="middle"
-      >
-        {building.name}
-      </Text>
-    </group>
-  );
-}
-
-// 3D Scene component
-function Scene({ buildings, selectedBuilding, onBuildingClick }) {
-  return (
-    <>
-      <ambientLight intensity={0.6} />
-      <pointLight position={[100, 100, 100]} intensity={1} />
-      <pointLight position={[-100, 100, -100]} intensity={0.5} />
-      
-      {/* Ground plane */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -10, 0]}>
-        <planeGeometry args={[1000, 1000]} />
-        <meshStandardMaterial color="#2c3e50" />
-      </mesh>
-
-      {/* Buildings */}
-      {buildings.map((building) => (
-        <Building
-          key={building.id}
-          building={building}
-          isSelected={selectedBuilding?.id === building.id}
-          onClick={onBuildingClick}
-        />
-      ))}
-
-      <OrbitControls enablePan={true} enableZoom={true} enableRotate={true} />
-    </>
-  );
-}
-
-// Main App component
 function App() {
+  const mountRef = useRef(null);
+  const sceneRef = useRef(null);
+  const rendererRef = useRef(null);
+  const cameraRef = useRef(null);
+  const buildingMeshesRef = useRef([]);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const mouseRef = useRef(new THREE.Vector2());
+  const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
+  const [highlightedBuildings, setHighlightedBuildings] = useState([]);
+
   // State management
   const [buildings, setBuildings] = useState([]);
   const [selectedBuilding, setSelectedBuilding] = useState(null);
@@ -85,10 +23,157 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Fetch buildings data from backend
+  // Initialize Three.js scene
+  useEffect(() => {
+    if (!mountRef.current) return;
+
+    // Scene setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x34495e);
+    sceneRef.current = scene;
+
+    // Camera setup
+    const camera = new THREE.PerspectiveCamera(
+      75, 
+      mountRef.current.clientWidth / mountRef.current.clientHeight, 
+      0.1, 
+      1000
+    );
+    camera.position.set(100, 100, 100);
+    camera.lookAt(0, 0, 0);
+    cameraRef.current = camera;
+
+    // Renderer setup
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    mountRef.current.appendChild(renderer.domElement);
+    rendererRef.current = renderer;
+
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(100, 100, 50);
+    directionalLight.castShadow = true;
+    scene.add(directionalLight);
+
+    // Ground plane
+    const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
+    const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x2c3e50 });
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -10;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // Controls (basic orbit controls)
+    let isMouseDown = false;
+    let mouseDownPosition = { x: 0, y: 0 };
+    let cameraRotation = { x: 0, y: 0 };
+
+    const handleMouseDown = (event) => {
+      isMouseDown = true;
+      mouseDownPosition.x = event.clientX;
+      mouseDownPosition.y = event.clientY;
+    };
+
+    const handleMouseMove = (event) => {
+      if (!isMouseDown) return;
+      
+      const deltaX = event.clientX - mouseDownPosition.x;
+      const deltaY = event.clientY - mouseDownPosition.y;
+      
+      cameraRotation.y += deltaX * 0.01;
+      cameraRotation.x += deltaY * 0.01;
+      
+      const radius = 200;
+      camera.position.x = Math.sin(cameraRotation.y) * Math.cos(cameraRotation.x) * radius;
+      camera.position.y = Math.sin(cameraRotation.x) * radius;
+      camera.position.z = Math.cos(cameraRotation.y) * Math.cos(cameraRotation.x) * radius;
+      camera.lookAt(0, 0, 0);
+      
+      mouseDownPosition.x = event.clientX;
+      mouseDownPosition.y = event.clientY;
+    };
+
+    const handleMouseUp = () => {
+      isMouseDown = false;
+    };
+
+    const handleWheel = (event) => {
+      const scale = event.deltaY > 0 ? 1.1 : 0.9;
+      camera.position.multiplyScalar(scale);
+      camera.lookAt(0, 0, 0);
+    };
+
+    renderer.domElement.addEventListener('mousedown', handleMouseDown);
+    renderer.domElement.addEventListener('mousemove', handleMouseMove);
+    renderer.domElement.addEventListener('mouseup', handleMouseUp);
+    renderer.domElement.addEventListener('wheel', handleWheel);
+
+    // Mouse click detection
+    const handleClick = (event) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycasterRef.current.setFromCamera(mouseRef.current, camera);
+      const intersects = raycasterRef.current.intersectObjects(buildingMeshesRef.current);
+
+      if (intersects.length > 0) {
+        const clickedMesh = intersects[0].object;
+        const buildingData = clickedMesh.userData;
+        setSelectedBuilding(buildingData);
+      }
+    };
+
+    renderer.domElement.addEventListener('click', handleClick);
+
+    // Animation loop
+    const animate = () => {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    };
+    animate();
+
+    // Handle resize
+    const handleResize = () => {
+      if (!mountRef.current) return;
+      camera.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+    };
+
+    window.addEventListener('resize', handleResize);
+
+    // Cleanup
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      renderer.domElement.removeEventListener('mousedown', handleMouseDown);
+      renderer.domElement.removeEventListener('mousemove', handleMouseMove);
+      renderer.domElement.removeEventListener('mouseup', handleMouseUp);
+      renderer.domElement.removeEventListener('wheel', handleWheel);
+      renderer.domElement.removeEventListener('click', handleClick);
+      
+      if (mountRef.current && renderer.domElement) {
+        mountRef.current.removeChild(renderer.domElement);
+      }
+      renderer.dispose();
+    };
+  }, []);
+
+  // Fetch buildings data
   useEffect(() => {
     fetchBuildings();
   }, []);
+
+  const handleBuildingClick = (building, screenPos) => {
+    setSelectedBuilding(building);
+    setPopupPosition(screenPos);
+  };
 
   const fetchBuildings = async () => {
     try {
@@ -104,10 +189,39 @@ function App() {
     }
   };
 
-  // Handle building selection
-  const handleBuildingClick = (building) => {
-    setSelectedBuilding(building);
-  };
+  // Update buildings in 3D scene
+  useEffect(() => {
+    if (!sceneRef.current || buildings.length === 0) return;
+
+    // Clear existing building meshes
+    buildingMeshesRef.current.forEach(mesh => {
+      sceneRef.current.remove(mesh);
+    });
+    buildingMeshesRef.current = [];
+
+    // Add new building meshes
+    buildings.forEach(building => {
+      // Convert lat/lng to 3D coordinates
+      const x = (building.lng + 114.0719) * 1000;
+      const z = (building.lat - 51.0447) * 1000;
+      const height = building.height / 2;
+
+      const geometry = new THREE.BoxGeometry(20, height, 20);
+      const material = new THREE.MeshLambertMaterial({ 
+        color: selectedBuilding?.id === building.id ? 0xffff00 : building.color,
+        transparent: true,
+        opacity: 0.8
+      });
+      
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(x, height / 2, z);
+      mesh.castShadow = true;
+      mesh.userData = building;
+      
+      sceneRef.current.add(mesh);
+      buildingMeshesRef.current.push(mesh);
+    });
+  }, [buildings, selectedBuilding]);
 
   // Handle query submission
   const handleQuerySubmit = async (e) => {
@@ -127,7 +241,7 @@ function App() {
     }
   };
 
-  // Save current project
+  // Save/Load project functions
   const saveProject = () => {
     const project = {
       id: Date.now(),
@@ -140,14 +254,13 @@ function App() {
     setSavedProjects([...savedProjects, project]);
   };
 
-  // Load project
   const loadProject = (project) => {
     setBuildings(project.buildings);
     setActiveFilters(project.filters);
     setSelectedBuilding(project.selectedBuilding);
   };
 
-  // Filter buildings based on active filters
+  // Filter buildings
   const filteredBuildings = buildings.filter(building => {
     if (activeFilters.height_min && building.height < activeFilters.height_min) return false;
     if (activeFilters.height_max && building.height > activeFilters.height_max) return false;
@@ -199,7 +312,8 @@ function App() {
       backgroundColor: '#2c3e50',
       borderLeft: '2px solid #34495e',
       display: 'flex',
-      flexDirection: 'column'
+      flexDirection: 'column',
+      overflowY: 'auto'
     },
     panel: {
       padding: '20px',
@@ -234,16 +348,6 @@ function App() {
       fontSize: '14px',
       fontWeight: 'bold'
     },
-    buttonSecondary: {
-      padding: '8px 12px',
-      backgroundColor: '#95a5a6',
-      color: 'white',
-      border: 'none',
-      borderRadius: '4px',
-      cursor: 'pointer',
-      fontSize: '12px',
-      margin: '2px'
-    },
     buildingInfo: {
       backgroundColor: '#34495e',
       padding: '15px',
@@ -275,10 +379,7 @@ function App() {
       padding: '10px',
       borderRadius: '4px',
       margin: '5px 0',
-      cursor: 'pointer',
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center'
+      cursor: 'pointer'
     }
   };
 
@@ -294,16 +395,14 @@ function App() {
 
       {/* Main Content */}
       <div style={styles.mainContent}>
-        {/* 3D Canvas */}
-        <div style={styles.canvasContainer}>
-          <Canvas camera={{ position: [100, 100, 100], fov: 60 }}>
-            <Scene
-              buildings={filteredBuildings}
-              selectedBuilding={selectedBuilding}
-              onBuildingClick={handleBuildingClick}
-            />
-          </Canvas>
-        </div>
+        {/* 3D Canvas Container */}
+        <CityMap 
+          buildings={buildings}
+          selectedBuilding={selectedBuilding}
+          highlightedBuildings={highlightedBuildings}
+          onBuildingClick={handleBuildingClick}
+          style={styles.canvasContainer}
+        />
 
         {/* Sidebar */}
         <div style={styles.sidebar}>
@@ -385,11 +484,9 @@ function App() {
                     style={styles.projectItem}
                     onClick={() => loadProject(project)}
                   >
-                    <div>
-                      <div>{project.name}</div>
-                      <div style={{ fontSize: '12px', color: '#bdc3c7' }}>
-                        {new Date(project.timestamp).toLocaleDateString()}
-                      </div>
+                    <div>{project.name}</div>
+                    <div style={{ fontSize: '12px', color: '#bdc3c7' }}>
+                      {new Date(project.timestamp).toLocaleDateString()}
                     </div>
                   </div>
                 ))}
