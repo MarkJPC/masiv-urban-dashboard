@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
@@ -14,8 +14,10 @@ const CityMap = ({
   const cameraRef = useRef(null);
   const controlsRef = useRef(null);
   const buildingMeshesRef = useRef([]);
+  const buildingMapRef = useRef(new Map());
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
+  const animationFrameRef = useRef(null);
 
   // Calgary downtown center coordinates
   const CALGARY_CENTER = {
@@ -26,16 +28,32 @@ const CityMap = ({
   // Scale factor for coordinate conversion
   const COORD_SCALE = 10000;
 
-  // Initialize Three.js scene
-  useEffect(() => {
-    console.log('=== DEBUGGING BUILDINGS DATA ===');
-    console.log('Total buildings:', buildings.length);
-    console.log('Buildings data:', buildings);
-    if (buildings.length > 0) {
-      console.log('First building coords:', buildings[0]?.lat, buildings[0]?.lng);
-      console.log('Calgary center:', CALGARY_CENTER);
-    }
+  // Memoized click handler to prevent re-renders
+  const handleBuildingClick = useCallback((event) => {
+    if (!onBuildingClick || !rendererRef.current || !cameraRef.current) return;
 
+    const rect = rendererRef.current.domElement.getBoundingClientRect();
+    mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+    const intersects = raycasterRef.current.intersectObjects(buildingMeshesRef.current);
+
+    // Use mouse event coordinates directly
+    const screenPos = {
+      x: event.clientX,
+      y: event.clientY
+    };
+
+    if (intersects.length > 0) {
+      const clickedMesh = intersects[0].object;
+      const buildingData = clickedMesh.userData;
+      onBuildingClick(buildingData, screenPos);
+    }
+  }, [onBuildingClick]);
+
+  // Initialize Three.js scene ONCE on mount
+  useEffect(() => {
     if (!mountRef.current) return;
 
     // Scene setup
@@ -107,8 +125,6 @@ const CityMap = ({
     axesHelper.position.y = 0;
     scene.add(axesHelper);
 
-    console.log('Added grid and axes helpers');
-
     // OrbitControls setup
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -120,29 +136,12 @@ const CityMap = ({
     controls.target.set(0, 0, 0);
     controlsRef.current = controls;
 
-    // Mouse click detection
-    const handleClick = (event) => {
-      if (!onBuildingClick) return;
-
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-      raycasterRef.current.setFromCamera(mouseRef.current, camera);
-      const intersects = raycasterRef.current.intersectObjects(buildingMeshesRef.current);
-
-      if (intersects.length > 0) {
-        const clickedMesh = intersects[0].object;
-        const buildingData = clickedMesh.userData;
-        onBuildingClick(buildingData);
-      }
-    };
-
-    renderer.domElement.addEventListener('click', handleClick);
+    // Add click event listener
+    renderer.domElement.addEventListener('click', handleBuildingClick);
 
     // Animation loop
     const animate = () => {
-      requestAnimationFrame(animate);
+      animationFrameRef.current = requestAnimationFrame(animate);
       controls.update();
       renderer.render(scene, camera);
     };
@@ -165,7 +164,11 @@ const CityMap = ({
     // Cleanup function
     return () => {
       window.removeEventListener('resize', handleResize);
-      renderer.domElement.removeEventListener('click', handleClick);
+      renderer.domElement.removeEventListener('click', handleBuildingClick);
+      
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
       
       if (mountRef.current && renderer.domElement) {
         mountRef.current.removeChild(renderer.domElement);
@@ -173,11 +176,19 @@ const CityMap = ({
       
       controls.dispose();
       renderer.dispose();
+      
+      // Clean up geometries and materials
+      buildingMeshesRef.current.forEach(mesh => {
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (mesh.material) mesh.material.dispose();
+      });
+      buildingMeshesRef.current = [];
+      buildingMapRef.current.clear();
     };
-  }, [onBuildingClick]);
+  }, []); // Empty dependency array - scene setup only runs once
 
   // Function to get building color based on zoning
-  const getBuildingColor = (zoning) => {
+  const getBuildingColor = useCallback((zoning) => {
     switch (zoning?.toLowerCase()) {
       case 'rc-g': // Residential
       case 'residential':
@@ -192,70 +203,43 @@ const CityMap = ({
       default:
         return 0x95a5a6; // Gray
     }
-  };
+  }, []);
 
   // Function to convert lat/lng to 3D coordinates
-  const latLngTo3D = (lat, lng) => {
-    // Subtract center coordinates first, then scale
+  const latLngTo3D = useCallback((lat, lng) => {
     const x = (lng - CALGARY_CENTER.lng) * COORD_SCALE;
     const z = (lat - CALGARY_CENTER.lat) * COORD_SCALE;
-    
-    console.log(`Building at lat:${lat}, lng:${lng} -> 3D coords: x:${x.toFixed(2)}, z:${z.toFixed(2)}`);
-    
     return { x, z };
-  };
+  }, [COORD_SCALE, CALGARY_CENTER.lng, CALGARY_CENTER.lat]);
 
-  // Update buildings in scene
+  // Create buildings ONCE when buildings data changes
   useEffect(() => {
     if (!sceneRef.current || !buildings.length) return;
 
     // Clear existing building meshes
     buildingMeshesRef.current.forEach(mesh => {
       sceneRef.current.remove(mesh);
-      mesh.geometry.dispose();
-      mesh.material.dispose();
+      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.material) mesh.material.dispose();
     });
     buildingMeshesRef.current = [];
-
-    console.log('=== CREATING BUILDING MESHES ===');
+    buildingMapRef.current.clear();
     
     // Create new building meshes
     buildings.forEach((building, index) => {
-      // Convert lat/lng to 3D coordinates
       const coords = latLngTo3D(building.lat, building.lng);
-      const height = Math.max(building.height * 0.3, 10); // Scale height and minimum of 10
-
-      console.log(`Building ${index + 1} (${building.name}):`);
-      console.log(`  - Original coords: lat:${building.lat}, lng:${building.lng}`);
-      console.log(`  - 3D position: x:${coords.x.toFixed(2)}, y:${(height/2).toFixed(2)}, z:${coords.z.toFixed(2)}`);
-      console.log(`  - Height: ${height.toFixed(2)} (from ${building.height})`);
-      console.log(`  - Zoning: ${building.zoning}`);
+      const height = Math.max(building.height * 0.3, 10);
 
       // Create geometry
-      const geometry = new THREE.BoxGeometry(8, height, 8); // Smaller buildings
+      const geometry = new THREE.BoxGeometry(8, height, 8);
       
-      // Determine building color and effects
+      // Base color from zoning
       const baseColor = getBuildingColor(building.zoning);
-      let emissive = 0x000000;
       
-      // Check if building is highlighted
-      const isHighlighted = highlightedBuildings.some(hb => hb.id === building.id);
-      const isSelected = selectedBuilding?.id === building.id;
-      
-      if (isSelected) {
-        emissive = 0x444444; // Selected glow
-      } else if (isHighlighted) {
-        emissive = 0x888888; // Highlighted glow
-      }
-
-      // Add unique color variation for visual distinction
-      const hue = (index * 137.508) % 360; // Golden angle for good distribution
-      const uniqueColor = new THREE.Color().setHSL(hue / 360, 0.7, 0.5);
-      
-      // Create material with unique colors for debugging
+      // Create material
       const material = new THREE.MeshLambertMaterial({
-        color: uniqueColor.getHex(), // Use unique color for now
-        emissive: emissive,
+        color: baseColor,
+        emissive: 0x000000,
         transparent: true,
         opacity: 0.9
       });
@@ -267,16 +251,48 @@ const CityMap = ({
       mesh.receiveShadow = true;
       mesh.userData = building;
 
-      console.log(`  - Final mesh position: (${mesh.position.x.toFixed(2)}, ${mesh.position.y.toFixed(2)}, ${mesh.position.z.toFixed(2)})`);
+      // Store original material properties
+      mesh.userData.originalColor = baseColor;
+      mesh.userData.originalEmissive = 0x000000;
 
-      // Add to scene and track
+      // Add to scene and tracking
       sceneRef.current.add(mesh);
       buildingMeshesRef.current.push(mesh);
+      buildingMapRef.current.set(building.id, mesh);
     });
-    
-    console.log(`Total meshes created: ${buildingMeshesRef.current.length}`);
-    console.log('=== END BUILDING CREATION ===');
-  }, [buildings, selectedBuilding, highlightedBuildings]);
+  }, [buildings, getBuildingColor, latLngTo3D]);
+
+  // Update building highlights ONLY when selection changes
+  useEffect(() => {
+    if (!buildingMapRef.current.size) return;
+
+    // Reset all buildings to original state
+    buildingMeshesRef.current.forEach(mesh => {
+      if (mesh.material && mesh.userData) {
+        mesh.material.color.setHex(mesh.userData.originalColor);
+        mesh.material.emissive.setHex(mesh.userData.originalEmissive);
+        mesh.material.needsUpdate = true;
+      }
+    });
+
+    // Apply highlights
+    highlightedBuildings.forEach(building => {
+      const mesh = buildingMapRef.current.get(building.id);
+      if (mesh && mesh.material) {
+        mesh.material.emissive.setHex(0x333333);
+        mesh.material.needsUpdate = true;
+      }
+    });
+
+    // Apply selection
+    if (selectedBuilding) {
+      const mesh = buildingMapRef.current.get(selectedBuilding.id);
+      if (mesh && mesh.material) {
+        mesh.material.emissive.setHex(0x666666);
+        mesh.material.needsUpdate = true;
+      }
+    }
+  }, [selectedBuilding, highlightedBuildings]);
 
   return (
     <div 
@@ -291,4 +307,16 @@ const CityMap = ({
   );
 };
 
-export default CityMap;
+// Memoize component to prevent unnecessary re-renders and fix hot reload issues
+export default React.memo(CityMap, (prevProps, nextProps) => {
+  // Custom comparison for better performance
+  return (
+    prevProps.buildings === nextProps.buildings &&
+    prevProps.selectedBuilding?.id === nextProps.selectedBuilding?.id &&
+    prevProps.highlightedBuildings.length === nextProps.highlightedBuildings.length &&
+    prevProps.highlightedBuildings.every((hb, index) => 
+      hb.id === nextProps.highlightedBuildings[index]?.id
+    ) &&
+    prevProps.onBuildingClick === nextProps.onBuildingClick
+  );
+});

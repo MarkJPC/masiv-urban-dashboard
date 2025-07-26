@@ -294,6 +294,7 @@ def process_llm_query():
         
         # Optional: Use Hugging Face API for more sophisticated processing
         if os.getenv('HUGGINGFACE_API_KEY'):
+            logger.info("Enhancing filters with LLM")
             enhanced_criteria = enhance_with_llm(query, filter_criteria)
             if enhanced_criteria:
                 filter_criteria = enhanced_criteria
@@ -330,9 +331,8 @@ def parse_query_to_filters(query: str) -> Dict[str, Any]:
         match = re.search(pattern, query)
         if match:
             height = int(match.group(1))
-            # Convert feet to meters if needed
-            if 'feet' in match.group(0) or 'ft' in match.group(0):
-                height = int(height * 0.3048)
+            # Keep height in feet to match building data, or convert if building data is in meters
+            # Since our building data has height in feet, don't convert
             filters[filter_type] = height
 
     # Value filters
