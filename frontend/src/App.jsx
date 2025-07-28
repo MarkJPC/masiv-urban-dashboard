@@ -86,7 +86,8 @@ function App() {
   const fetchBuildings = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('/api/buildings');
+      const response = await axios.get(`${process.env.REACT_APP_API_URL}/api/buildings`);
+      console.log('Fetched buildings:', response.data.buildings);
       setBuildings(response.data.buildings);
       setError(null);
     } catch (err) {
@@ -107,9 +108,9 @@ function App() {
       setLoading(true);
       setError(null);
       console.log('Processing query:', query);
-      
-      const response = await axios.post('/api/query', { query });
-      
+
+      const response = await axios.post(`${process.env.REACT_APP_API_URL}/api/query`, { query });
+      console.log('Query response:', response.data);
       if (response.data.parsed_successfully) {
         const filterCriteria = response.data.filter_criteria;
         setActiveFilters(filterCriteria);
