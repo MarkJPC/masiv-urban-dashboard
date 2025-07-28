@@ -12,8 +12,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:3000'])
-
+CORS(app, origins=[
+    'http://localhost:3000',
+    'https://masiv-urban-dashboard.vercel.app'
+])
 # Calgary building data in a 4-block grid (Centre St to 2nd St SW, 6th Ave to 9th Ave SW)
 # Grid arranged for visible pattern: 5x4 layout
 MOCK_BUILDINGS = [
