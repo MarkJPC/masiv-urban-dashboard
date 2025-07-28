@@ -237,8 +237,6 @@ npm start
 
 ## 📊 Project Metrics
 
-- **Development Time**: ~6 hours (extended due to external circumstances)
-- **Lines of Code**: ~1,200 (frontend + backend)
 - **Components**: 4 React components, 3 API endpoints
 - **Dependencies**: 15 npm packages, 6 Python packages
 - **Deployment**: 2 cloud services, automated CI/CD
@@ -252,7 +250,7 @@ Built as a technical assessment for MASIV (Mercedes and Singh Innovative Venture
 **Mark Cena**  
 📧 markjpcena@gmail.com  
 📱 587-577-0296  
-🔗 [LinkedIn](https://linkedin.com/in/mark-cena)  
+🔗 [LinkedIn](https://www.linkedin.com/in/mark-cena-bb8658267/)  
 🐙 [GitHub](https://github.com/MARKJPC)
 
 ---
