@@ -110,13 +110,16 @@ function App() {
       console.log('Processing query:', query);
 
       const response = await axios.post(`${process.env.REACT_APP_API_URL}/api/query`, { query });
-      console.log('Query response:', response.data);
+      console.log('Raw LLM response:', response.data);
+      
       if (response.data.parsed_successfully) {
         const filterCriteria = response.data.filter_criteria;
+        console.log('Parsed filter criteria:', filterCriteria);
         setActiveFilters(filterCriteria);
         
         // Apply filters to buildings and set highlighted buildings
         const filtered = applyFilters(buildings, filterCriteria);
+        console.log('Buildings that match filter:', filtered.map(b => ({ id: b.id, name: b.name, value: b.value, height: b.height })));
         setHighlightedBuildings(filtered);
         
         console.log('Query processed successfully:', {
@@ -124,7 +127,7 @@ function App() {
           criteria: filterCriteria,
           totalBuildings: buildings.length,
           matchedBuildings: filtered.length,
-          filteredBuildings: filtered.map(b => ({ id: b.id, name: b.name, height: b.height }))
+          buildingValuesInData: buildings.map(b => ({ id: b.id, name: b.name, value: b.value })).slice(0, 5)
         });
       } else {
         setError('Could not parse query. Please try a different format.');

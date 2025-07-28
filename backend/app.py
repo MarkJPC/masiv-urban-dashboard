@@ -293,6 +293,7 @@ def process_llm_query():
 
         # Parse query and generate filter criteria
         filter_criteria = parse_query_to_filters(query)
+        logger.info(f"Generated filter criteria: {filter_criteria}")
         
         # Optional: Use Hugging Face API for more sophisticated processing
         if os.getenv('HUGGINGFACE_API_KEY'):
@@ -339,6 +340,8 @@ def parse_query_to_filters(query: str) -> Dict[str, Any]:
 
     # Value filters
     value_patterns = [
+        (r'buildings?\s+under\s+\$?(\d+)(?:\s*million)?', 'value_max'),
+        (r'buildings?\s+below\s+\$?(\d+)(?:\s*million)?', 'value_max'),
         (r'buildings?\s+worth\s+over\s+\$?(\d+)(?:\s*million)?', 'value_min'),
         (r'buildings?\s+valued\s+above\s+\$?(\d+)(?:\s*million)?', 'value_min'),
         (r'expensive\s+buildings?', 'value_min_preset'),
@@ -357,6 +360,8 @@ def parse_query_to_filters(query: str) -> Dict[str, Any]:
                 value = int(match.group(1))
                 if 'million' in match.group(0):
                     value *= 1000000
+                elif value < 1000:  # Assume thousands if under 1000
+                    value *= 1000
                 filters['value_min' if 'min' in filter_type else 'value_max'] = value
 
     # Zoning filters (Calgary specific)
@@ -426,7 +431,7 @@ def enhance_with_llm(query: str, base_filters: Dict[str, Any]) -> Dict[str, Any]
         }
 
         response = requests.post(
-            "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
+            "https://huggingface.co/models/api/distilbert/distilgpt2",
             headers=headers,
             json=payload,
             timeout=10
